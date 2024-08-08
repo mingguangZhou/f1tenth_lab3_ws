@@ -5,15 +5,18 @@
 #include "ackermann_msgs/msg/ackermann_drive_stamped.hpp"
 
 #include <cmath>
+#include <chrono>
 
 class WallFollow : public rclcpp::Node {
 
 public:
-    WallFollow() : Node("wall_follow_node")
+    WallFollow() : Node("wall_follow_node"), time_prev_(this->now())
     {
         // create ROS subscribers and publishers
         scan_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
                 lidarscan_topic, 10, std::bind(&WallFollow::scan_callback, this, std::placeholders::_1));
+        odom_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(
+                odom_topic, 10, std::bind(&WallFollow::drive_callback, this, std::placeholders::_1));
         drive_publisher_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(drive_topic, 10);
         RCLCPP_INFO(this->get_logger(), "Wall Follow Node has been started");
       
@@ -26,14 +29,20 @@ private:
     double ki = 0.0;
     double servo_offset = 0.0;
     double prev_error = 0.0;
-    double error = 0.0;
+    // double error = 0.0;
     double integral = 0.0;
+
+    rclcpp::Time time_prev_;
+
+    double speed_curr = 0.0;
 
     // Topics
     std::string lidarscan_topic = "/scan";
     std::string drive_topic = "/drive";
+    std::string odom_topic = '/ego_racecar/odom';
     /// create ROS subscribers and publishers
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_subscriber_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_subscriber_;
     rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_publisher_;
     
     
@@ -68,7 +77,13 @@ private:
         return static_cast<double>(range);
     }
 
-    double get_error(float* range_data, double dist, double velocity, float angle_min_rad, float angle_increment_rad)
+    void drive_callback(const nav_msgs::msg::Odometry::ConstSharedPtr msg)
+    {
+        /// update current speed
+        speed_curr = msg->twist.twist.linear.x;
+    }
+
+    double get_error(float* range_data, double dist, double speed, float angle_min_rad, float angle_increment_rad)
     {
         /*
         Calculates the error to the wall. Follow the wall to the left (going counter clockwise in the Levine loop). You potentially will need to use get_range()
@@ -111,12 +126,12 @@ private:
         double alpha = std::atan((a * std::cos(theta) - b)/(a * std::sin(theta)));
         double dist_curr = b * std::cos(alpha);
 
-        double dist_pred = dist_curr + velocity * t_delay * std::sin(alpha)
+        double dist_pred = dist_curr + speed * t_delay * std::sin(alpha)
 
         return (dist - dist_pred);
     }
 
-    void pid_control(double error, double velocity, double dt)
+    void pid_control(double error, double dt)
     {
         /*
         Based on the calculated error, publish vehicle control
@@ -131,14 +146,27 @@ private:
         
         // Use kp, ki & kd to implement a PID controller
         double angle = kp * error + ki * integral + kd * (error - prev_error) / dt;
-        integral += error * dt;
-        prev_error = error;
+        double angle_deg = angle * (180.0 / M_PI);
+        // generate desired velocity from steering angle
+        double velocity;
+        if (fabs(angle_deg)>=0.0 && fabs(angle_deg)<=10.0) {
+            velocity = 1.5;
+        } else if (fabs(angle_deg)>10.0 && fabs(angle_deg)<=20.0) {
+            velocity = 1.0;
+        } else {
+            velocity = 0.5;
+        }
 
         auto drive_msg = ackermann_msgs::msg::AckermannDriveStamped();
-        // TODO: fill in drive message and publish
+        // fill in drive message and publish
         drive_msg.drive.speed = static_cast<float>(velocity);
         drive_msg.drive.steering_angle = static_cast<float>(angle);
         drive_publisher_ ->publish(drive_msg);
+        RCLCPP_INFO(this->get_logger(), "steering command: %f deg", angle_deg);
+        RCLCPP_INFO(this->get_logger(), "speed command: %f m/s", velocity);
+
+        integral += error * dt;
+        prev_error = error;
     }
 
     void scan_callback(const sensor_msgs::msg::LaserScan::ConstSharedPtr scan_msg) 
@@ -152,13 +180,22 @@ private:
         Returns:
             None
         */
-        double error = 0.0; // TODO: replace with error calculated by get_error()
-        double velocity = 0.0; // TODO: calculate desired car velocity based on error
-        // TODO: actuate the car with PID
-
         float angle_min = scan_msg->angle_min;
         float angle_increment = scan_msg->angle_increment;
 
+        // handle time
+        rclcpp::Time time_now = msg->header.stamp;
+        rclcpp::Duration duration = time_now - time_prev_;
+        double dt = duration.seconds();
+        RCLCPP_INFO(this->get_logger(), "Time difference: %f seconds", dt);
+
+        // error calculated by get_error()
+        double error = get_error(scan_msg->ranges, 1.0, speed_curr, angle_min, angle_increment);
+
+        // actuate the car with PID
+        pid_control(error, dt);
+
+        time_prev_ = time_now;
     }
 
 };
