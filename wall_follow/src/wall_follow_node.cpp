@@ -24,13 +24,14 @@ public:
 
 private:
     // PID CONTROL PARAMS
-    double kp = 1.0;
+    double kp = 0.5;
     double kd = 0.0;
     double ki = 0.0;
     double servo_offset = 0.0;
     double prev_error = 0.0;
     // double error = 0.0;
     double integral = 0.0;
+    double dist_desired = 0.7;
 
     rclcpp::Time time_prev_;
 
@@ -60,8 +61,8 @@ private:
             range: range measurement in meters at the given angle
         */
 
-        // implement
-        float angle_rad = angle_deg * (M_PI / 180.0);
+        // convert angle to the right of the car
+        float angle_rad = (angle_deg - 90.0) * (M_PI / 180.0);
         // Find the corresponding index in the range_data array
         int index = static_cast<int>((angle_rad - angle_min_rad) / angle_increment_rad);
 
@@ -102,7 +103,7 @@ private:
         double ang_2 = 50.0;
         const double max_angle_2 = 70.0;
         // Assumed delay time
-        double t_delay = 0.1;
+        double t_delay = 0.01;
         
 
         double a = get_range(range_data, ang_1, angle_min_rad, angle_increment_rad);
@@ -125,6 +126,15 @@ private:
 
         double alpha = std::atan((a * std::cos(theta) - b)/(a * std::sin(theta)));
         double dist_curr = b * std::cos(alpha);
+
+        // debug 
+        double alpha_deg = alpha * (180 / M_PI);
+        RCLCPP_INFO(this->get_logger(), "current a dist: %f [m]", a);
+        RCLCPP_INFO(this->get_logger(), "current b dist: %f [m]", b);
+        // double c = get_range(range_data, 0.0, angle_min_rad, angle_increment_rad);
+        // RCLCPP_INFO(this->get_logger(), "0 deg dist: %f [m]", c);
+        RCLCPP_INFO(this->get_logger(), "current alpha: %f [deg]", alpha_deg);
+        RCLCPP_INFO(this->get_logger(), "current dist to right wall: %f [m]", dist_curr);
 
         double dist_pred = dist_curr + speed * t_delay * std::sin(alpha);
 
@@ -150,20 +160,22 @@ private:
         // generate desired velocity from steering angle
         double velocity;
         if (fabs(angle_deg)>=0.0 && fabs(angle_deg)<=10.0) {
-            velocity = 1.5;
-        } else if (fabs(angle_deg)>10.0 && fabs(angle_deg)<=20.0) {
             velocity = 1.0;
-        } else {
+        } else if (fabs(angle_deg)>10.0 && fabs(angle_deg)<=20.0) {
             velocity = 0.5;
+        } else {
+            velocity = 0.3;
         }
+        // velocity = 0.1;
 
         auto drive_msg = ackermann_msgs::msg::AckermannDriveStamped();
         // fill in drive message and publish
         drive_msg.drive.speed = static_cast<float>(velocity);
         drive_msg.drive.steering_angle = static_cast<float>(angle);
+        // drive_msg.drive.steering_angle = 0.0;
         drive_publisher_ ->publish(drive_msg);
-        RCLCPP_INFO(this->get_logger(), "steering command: %f deg", angle_deg);
-        RCLCPP_INFO(this->get_logger(), "speed command: %f m/s", velocity);
+        RCLCPP_INFO(this->get_logger(), "steering command: %f [deg]", angle_deg);
+        // RCLCPP_INFO(this->get_logger(), "speed command: %f m/s", velocity);
 
         integral += error * dt;
         prev_error = error;
@@ -190,7 +202,8 @@ private:
         RCLCPP_INFO(this->get_logger(), "Time difference: %f seconds", dt);
 
         // error calculated by get_error()
-        double error = get_error(scan_msg->ranges, 1.0, speed_curr, angle_min, angle_increment);
+        double error = get_error(scan_msg->ranges, dist_desired, speed_curr, angle_min, angle_increment);
+        RCLCPP_INFO(this->get_logger(), "Current Error: %f m", error);
 
         // actuate the car with PID
         pid_control(error, dt);
