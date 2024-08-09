@@ -19,19 +19,31 @@ public:
                 "ego_racecar/odom", 10, std::bind(&WallFollow::drive_callback, this, std::placeholders::_1));
         drive_publisher_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("drive", 10);
         RCLCPP_INFO(this->get_logger(), "Wall Follow Node has been started");
+
+        // Declare parameters with default values
+        this->declare_parameter<double>("kp", 0.0);
+        this->declare_parameter<double>("ki", 0.0);
+        this->declare_parameter<double>("kd", 0.0);
+
+        // Get parameters from the parameter server (YAML file)
+        kp_ = this->get_parameter("kp").as_double();
+        ki_ = this->get_parameter("ki").as_double();
+        kd_ = this->get_parameter("kd").as_double();
+
+        RCLCPP_INFO(this->get_logger(), "PID parameters loaded: kp=%f, ki=%f, kd=%f", kp_, ki_, kd_);
       
     }
 
 private:
     // PID CONTROL PARAMS
-    double kp = 0.5;
-    double kd = 0.0;
-    double ki = 0.0;
+    double kp_;
+    double ki_;
+    double kd_;
     double servo_offset = 0.0;
     double prev_error = 0.0;
     // double error = 0.0;
     double integral = 0.0;
-    double dist_desired = 0.7;
+    double dist_desired = 0.5;
 
     rclcpp::Time time_prev_;
 
@@ -61,8 +73,8 @@ private:
             range: range measurement in meters at the given angle
         */
 
-        // convert angle to the right of the car
-        float angle_rad = (angle_deg - 90.0) * (M_PI / 180.0);
+        // convert angle to the left of the car
+        float angle_rad = (90.0 - angle_deg) * (M_PI / 180.0);
         // Find the corresponding index in the range_data array
         int index = static_cast<int>((angle_rad - angle_min_rad) / angle_increment_rad);
 
@@ -91,7 +103,7 @@ private:
 
         Args:
             range_data: single range array from the LiDAR
-            dist: desired distance to the wall
+            dist: desired distance to the left wall
 
         Returns:
             error: calculated error
@@ -103,7 +115,7 @@ private:
         double ang_2 = 50.0;
         const double max_angle_2 = 70.0;
         // Assumed delay time
-        double t_delay = 0.01;
+        double t_delay = 0.05;
         
 
         double a = get_range(range_data, ang_1, angle_min_rad, angle_increment_rad);
@@ -122,7 +134,7 @@ private:
         }
 
 
-        double theta = (ang_2 - ang_1) * (M_PI / 180.0);
+        double theta = (ang_1 - ang_2) * (M_PI / 180.0);
 
         double alpha = std::atan((a * std::cos(theta) - b)/(a * std::sin(theta)));
         double dist_curr = b * std::cos(alpha);
@@ -134,7 +146,7 @@ private:
         // double c = get_range(range_data, 0.0, angle_min_rad, angle_increment_rad);
         // RCLCPP_INFO(this->get_logger(), "0 deg dist: %f [m]", c);
         RCLCPP_INFO(this->get_logger(), "current alpha: %f [deg]", alpha_deg);
-        RCLCPP_INFO(this->get_logger(), "current dist to right wall: %f [m]", dist_curr);
+        RCLCPP_INFO(this->get_logger(), "current dist to left wall: %f [m]", dist_curr);
 
         double dist_pred = dist_curr + speed * t_delay * std::sin(alpha);
 
@@ -155,23 +167,23 @@ private:
         */
         
         // Use kp, ki & kd to implement a PID controller
-        double angle = kp * error + ki * integral + kd * (error - prev_error) / dt;
+        double angle = kp_ * error + ki_ * integral + kd_ * (error - prev_error) / dt;
         double angle_deg = angle * (180.0 / M_PI);
         // generate desired velocity from steering angle
         double velocity;
         if (fabs(angle_deg)>=0.0 && fabs(angle_deg)<=10.0) {
-            velocity = 1.0;
+            velocity = 1.5;
         } else if (fabs(angle_deg)>10.0 && fabs(angle_deg)<=20.0) {
-            velocity = 0.5;
+            velocity = 1.0;
         } else {
-            velocity = 0.3;
+            velocity = 0.5;
         }
         // velocity = 0.1;
 
         auto drive_msg = ackermann_msgs::msg::AckermannDriveStamped();
         // fill in drive message and publish
         drive_msg.drive.speed = static_cast<float>(velocity);
-        drive_msg.drive.steering_angle = static_cast<float>(angle);
+        drive_msg.drive.steering_angle = static_cast<float>(-angle);
         // drive_msg.drive.steering_angle = 0.0;
         drive_publisher_ ->publish(drive_msg);
         RCLCPP_INFO(this->get_logger(), "steering command: %f [deg]", angle_deg);
