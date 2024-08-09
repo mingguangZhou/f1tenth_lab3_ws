@@ -14,10 +14,10 @@ public:
     {
         // create ROS subscribers and publishers
         scan_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
-                lidarscan_topic, 10, std::bind(&WallFollow::scan_callback, this, std::placeholders::_1));
+                "scan", 10, std::bind(&WallFollow::scan_callback, this, std::placeholders::_1));
         odom_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(
-                odom_topic, 10, std::bind(&WallFollow::drive_callback, this, std::placeholders::_1));
-        drive_publisher_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(drive_topic, 10);
+                "ego_racecar/odom", 10, std::bind(&WallFollow::drive_callback, this, std::placeholders::_1));
+        drive_publisher_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("drive", 10);
         RCLCPP_INFO(this->get_logger(), "Wall Follow Node has been started");
       
     }
@@ -37,9 +37,9 @@ private:
     double speed_curr = 0.0;
 
     // Topics
-    std::string lidarscan_topic = "/scan";
-    std::string drive_topic = "/drive";
-    std::string odom_topic = '/ego_racecar/odom';
+    // std::string lidarscan_topic = "/scan";
+    // std::string drive_topic = "/drive";
+    // std::string odom_topic = '/ego_racecar/odom';
     /// create ROS subscribers and publishers
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_subscriber_;
@@ -47,7 +47,7 @@ private:
     
     
 
-    double get_range(float* range_data, float angle_deg, float angle_min_rad, float angle_increment_rad)
+    double get_range(const std::vector<float>& range_data, float angle_deg, float angle_min_rad, float angle_increment_rad)
     {
         /*
         Simple helper to return the corresponding range measurement at a given angle. Make sure you take care of NaNs and infs.
@@ -83,7 +83,7 @@ private:
         speed_curr = msg->twist.twist.linear.x;
     }
 
-    double get_error(float* range_data, double dist, double speed, float angle_min_rad, float angle_increment_rad)
+    double get_error(const std::vector<float>& range_data, double dist, double speed, float angle_min_rad, float angle_increment_rad)
     {
         /*
         Calculates the error to the wall. Follow the wall to the left (going counter clockwise in the Levine loop). You potentially will need to use get_range()
@@ -126,7 +126,7 @@ private:
         double alpha = std::atan((a * std::cos(theta) - b)/(a * std::sin(theta)));
         double dist_curr = b * std::cos(alpha);
 
-        double dist_pred = dist_curr + speed * t_delay * std::sin(alpha)
+        double dist_pred = dist_curr + speed * t_delay * std::sin(alpha);
 
         return (dist - dist_pred);
     }
@@ -184,7 +184,7 @@ private:
         float angle_increment = scan_msg->angle_increment;
 
         // handle time
-        rclcpp::Time time_now = msg->header.stamp;
+        rclcpp::Time time_now = scan_msg->header.stamp;
         rclcpp::Duration duration = time_now - time_prev_;
         double dt = duration.seconds();
         RCLCPP_INFO(this->get_logger(), "Time difference: %f seconds", dt);
