@@ -1,5 +1,7 @@
 wall_follow_node:
   ros__parameters:
-    kp: 0.5
+    kp: 4.5
     ki: 0.0
-    kd: 0.05
+    kd: 0.18
+    dist_desired: 0.8
+    t_delay: 0.02

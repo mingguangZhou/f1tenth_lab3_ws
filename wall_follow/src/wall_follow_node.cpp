@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <chrono>
+#include <csignal>
 
 class WallFollow : public rclcpp::Node {
 
@@ -24,14 +25,28 @@ public:
         this->declare_parameter<double>("kp", 0.0);
         this->declare_parameter<double>("ki", 0.0);
         this->declare_parameter<double>("kd", 0.0);
+        this->declare_parameter<double>("dist_desired", 0.0);
+        this->declare_parameter<double>("t_delay", 0.0);
 
         // Get parameters from the parameter server (YAML file)
         kp_ = this->get_parameter("kp").as_double();
         ki_ = this->get_parameter("ki").as_double();
         kd_ = this->get_parameter("kd").as_double();
+        dist_desired_ = this->get_parameter("dist_desired").as_double();
+        t_delay_ = this->get_parameter("t_delay").as_double();
 
-        RCLCPP_INFO(this->get_logger(), "PID parameters loaded: kp=%f, ki=%f, kd=%f", kp_, ki_, kd_);
+        RCLCPP_INFO(this->get_logger(), "PID parameters loaded: kp=%f, ki=%f, kd=%f, dist_desired=%f, t_delay=%f", 
+                    kp_, ki_, kd_, dist_desired_, t_delay_);
       
+    }
+
+    void send_stop_command()
+    {
+        auto drive_msg = ackermann_msgs::msg::AckermannDriveStamped();
+        drive_msg.drive.speed = 0.0;
+        drive_msg.drive.steering_angle = 0.0;
+        drive_publisher_->publish(drive_msg);
+        RCLCPP_INFO(this->get_logger(), "Sending stop command: speed = 0, steering = 0");
     }
 
 private:
@@ -39,20 +54,17 @@ private:
     double kp_;
     double ki_;
     double kd_;
+    double dist_desired_;
+    double t_delay_;
+
     double servo_offset = 0.0;
     double prev_error = 0.0;
-    // double error = 0.0;
     double integral = 0.0;
-    double dist_desired = 0.5;
 
     rclcpp::Time time_prev_;
 
     double speed_curr = 0.0;
 
-    // Topics
-    // std::string lidarscan_topic = "/scan";
-    // std::string drive_topic = "/drive";
-    // std::string odom_topic = '/ego_racecar/odom';
     /// create ROS subscribers and publishers
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_subscriber_;
@@ -114,9 +126,6 @@ private:
         double ang_1 = 30.0;
         double ang_2 = 50.0;
         const double max_angle_2 = 70.0;
-        // Assumed delay time
-        double t_delay = 0.05;
-        
 
         double a = get_range(range_data, ang_1, angle_min_rad, angle_increment_rad);
         double b = get_range(range_data, ang_2, angle_min_rad, angle_increment_rad);
@@ -148,7 +157,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "current alpha: %f [deg]", alpha_deg);
         RCLCPP_INFO(this->get_logger(), "current dist to left wall: %f [m]", dist_curr);
 
-        double dist_pred = dist_curr + speed * t_delay * std::sin(alpha);
+        double dist_pred = dist_curr + speed * t_delay_ * std::sin(alpha);
 
         return (dist - dist_pred);
     }
@@ -214,7 +223,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "Time difference: %f seconds", dt);
 
         // error calculated by get_error()
-        double error = get_error(scan_msg->ranges, dist_desired, speed_curr, angle_min, angle_increment);
+        double error = get_error(scan_msg->ranges, dist_desired_, speed_curr, angle_min, angle_increment);
         RCLCPP_INFO(this->get_logger(), "Current Error: %f m", error);
 
         // actuate the car with PID
@@ -224,9 +233,27 @@ private:
     }
 
 };
+
+
+// Global pointer to the WallFollow node
+std::shared_ptr<WallFollow> g_wall_follow_node = nullptr;
+
+void signal_handler(int signum) {
+    (void)signum; // Mark signum as explicitly unused to avoid warning
+    if (g_wall_follow_node != nullptr) {
+        g_wall_follow_node->send_stop_command();
+    }
+    rclcpp::shutdown();
+}
+
 int main(int argc, char ** argv) {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<WallFollow>());
-    rclcpp::shutdown();
+    g_wall_follow_node = std::make_shared<WallFollow>();
+
+    // Set up signal handler
+    std::signal(SIGINT, signal_handler);
+
+    rclcpp::spin(g_wall_follow_node);
+    g_wall_follow_node = nullptr; // Reset the global pointer
     return 0;
 }
